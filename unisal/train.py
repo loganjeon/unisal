@@ -173,6 +173,7 @@ class Trainer(utils.KwConfigClass):
         self.chkpnt_warmup = chkpnt_warmup
         self.chkpnt_epochs = chkpnt_epochs
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        # device = "cuda:1" if torch.cuda.is_available() else "cpu"
         self.device = torch.device(device)
         self.tboard = tboard
         self.debug = debug
@@ -506,7 +507,7 @@ class Trainer(utils.KwConfigClass):
         pred_seq = torch.full(results_size, 0, dtype=torch.float)
         if metrics is not None:
             sal_seq = torch.full(results_size, 0, dtype=torch.float)
-            fix_seq = torch.full(results_size, 0, dtype=torch.uint8)
+            fix_seq = torch.full(results_size, 0, dtype=torch.bool)
         else:
             sal_seq, fix_seq = None, None
 
@@ -649,7 +650,7 @@ class Trainer(utils.KwConfigClass):
                 """Sample reference maps for s-AUC"""
                 while True:
                     this_map = np.zeros(results_size[-2:])
-                    video_nrs = random.sample(dataset.n_images_dict.keys(), n_aucs_maps)
+                    video_nrs = random.sample(list(dataset.n_images_dict.keys()), n_aucs_maps)
                     for map_idx, vid_nr in enumerate(video_nrs):
                         frame_nr = random.randint(1, dataset.n_images_dict[vid_nr])
                         if static_data:
@@ -659,7 +660,7 @@ class Trainer(utils.KwConfigClass):
                                 vid_nr, [frame_nr], "fix"
                             ).numpy()[0, 0, ...]
                         this_this_map = cv2.resize(
-                            this_this_map, tuple(target_size[::-1]), cv2.INTER_NEAREST
+                            this_this_map.astype(np.float32), tuple(target_size[::-1]), cv2.INTER_NEAREST
                         )
                         this_map += this_this_map
 
@@ -815,14 +816,20 @@ class Trainer(utils.KwConfigClass):
         # Compute the average video scores
         tmr.finish()
         scores = np.array(scores)
-        mean_scores = scores.mean(0)
+        if len(scores) > 0:
+            mean_scores = scores.mean(0)
+        else:
+            mean_scores = np.array([np.nan] * 6)  # 6 metrics: kld, nss, cc, sim, aucj, aucs
 
         # In previous literature, scores were computed across all video frames,
         # which means that each videos contribution to the overall score is
         # weighted by its number of frames. The equivalent scores are denoted
         # below as weighted mean
         num_frames_array = [dataset.n_images_dict[vid_nr] for vid_nr in vid_nr_array]
-        weighted_mean_scores = np.average(scores, 0, num_frames_array)
+        if len(scores) > 0 and num_frames_array and sum(num_frames_array) > 0:
+            weighted_mean_scores = np.average(scores, 0, num_frames_array)
+        else:
+            weighted_mean_scores = np.array([np.nan] * 6)  # 6 metrics: kld, nss, cc, sim, aucj, aucs
 
         # Print and save the scores
         print()

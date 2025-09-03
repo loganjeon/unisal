@@ -88,7 +88,7 @@ class SALICONDataset(Dataset, utils.KwConfigClass):
         return map
 
     def get_img(self, img_nr):
-        img_file = self.dir / 'images' / (
+        img_file = self.dir / 'images' / self.phase_str / (
                 self.file_stem + self.file_nr.format(img_nr) + '.jpg')
         img = cv2.imread(str(img_file))
         assert(img is not None)
@@ -125,7 +125,7 @@ class SALICONDataset(Dataset, utils.KwConfigClass):
 
     def prepare_samples(self):
         samples = []
-        for file in (self.dir / 'images').glob(self.file_stem + '*.jpg'):
+        for file in (self.dir / 'images' / self.phase_str).glob(self.file_stem + '*.jpg'):
             samples.append(int(file.stem[-12:]))
         return sorted(samples)
 

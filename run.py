@@ -16,6 +16,15 @@ def train(eval_sources=('DHF1K', 'SALICON', 'UCFSports', 'Hollywood'),
         trainer.export_scalars()
         trainer.writer.close()
 
+def train_finetune_mit(eval_sources=('MIT300',),
+          **kwargs):
+    """Run training and evaluation."""
+    trainer = unisal.train.Trainer(**kwargs)
+    trainer.fine_tune_mit()
+    for source in eval_sources:
+        trainer.score_model(source=source)
+        trainer.export_scalars()
+        trainer.writer.close()
 
 def load_trainer(train_id=None):
     """Instantiate Trainer class from saved kwargs."""

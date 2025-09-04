@@ -765,20 +765,39 @@ class Trainer(utils.KwConfigClass):
         """
 
         if load_weights:
-            # Load the best weights, if available, otherwise the weights of
-            # the last epoch
-            try:
-                self.model.load_best_weights(self.train_dir)
-                print("Best weights loaded")
-            except FileNotFoundError:
-                print("No best weights found")
-                self.model.load_last_chkpnt(self.train_dir)
-                print("Last checkpoint loaded")
+            # Load weights based on training mode
+            if hasattr(self, 'mit1003_finetuned') and self.mit1003_finetuned:
+                # Load fine-tuned MIT1003 weights if available
+                try:
+                    self.model.load_weights(self.train_dir, "ft_mit1003")
+                    print("MIT1003 fine-tuned weights loaded")
+                except FileNotFoundError:
+                    print("No fine-tuned weights found, loading best weights")
+                    try:
+                        self.model.load_best_weights(self.train_dir)
+                        print("Best weights loaded")
+                    except FileNotFoundError:
+                        print("No best weights found")
+                        self.model.load_last_chkpnt(self.train_dir)
+                        print("Last checkpoint loaded")
+            else:
+                # Load the best weights for regular training
+                try:
+                    self.model.load_best_weights(self.train_dir)
+                    print("Best weights loaded")
+                except FileNotFoundError:
+                    print("No best weights found")
+                    self.model.load_last_chkpnt(self.train_dir)
+                    print("Last checkpoint loaded")
 
         # Select the appropriate phase (see docstring) and get the dataset
         if phase is None:
             phase = "eval" if source in ("DHF1K", "SALICON", "MIT1003") else "test"
         dataset = self.get_dataset(phase, source)
+        
+        # MIT300 doesn't have ground truth labels, so disable metrics
+        if source == "MIT300":
+            metrics = None
 
         if vid_nr_array is None:
             # Get list of sample numbers
@@ -803,44 +822,58 @@ class Trainer(utils.KwConfigClass):
                 )
                 scores.append(this_scores)
                 if vid_idx == 0:
+                    if metrics is not None:
+                        print(
+                            f" Nr.   ( .../{len(vid_nr_array):4d}), "
+                            + ", ".join(f"{metric:5s}" for metric in metrics)
+                        )
+                    else:
+                        print(f" Nr.   ( .../{len(vid_nr_array):4d}), Inference only")
+                
+                if metrics is not None:
                     print(
-                        f" Nr.   ( .../{len(vid_nr_array):4d}), "
-                        + ", ".join(f"{metric:5s}" for metric in metrics)
+                        f"{vid_nr:6d} "
+                        + f"({vid_idx + 1:4d}/{len(vid_nr_array):4d}), "
+                        + ", ".join(f"{score:.3f}" for score in this_scores)
                     )
-                print(
-                    f"{vid_nr:6d} "
-                    + f"({vid_idx + 1:4d}/{len(vid_nr_array):4d}), "
-                    + ", ".join(f"{score:.3f}" for score in this_scores)
-                )
+                else:
+                    print(f"{vid_nr:6d} ({vid_idx + 1:4d}/{len(vid_nr_array):4d}), Inference completed")
 
         # Compute the average video scores
         tmr.finish()
         scores = np.array(scores)
-        if len(scores) > 0:
-            mean_scores = scores.mean(0)
-        else:
-            mean_scores = np.array([np.nan] * 6)  # 6 metrics: kld, nss, cc, sim, aucj, aucs
+        
+        if metrics is not None:
+            if len(scores) > 0:
+                mean_scores = scores.mean(0)
+            else:
+                mean_scores = np.array([np.nan] * len(metrics))
 
-        # In previous literature, scores were computed across all video frames,
-        # which means that each videos contribution to the overall score is
-        # weighted by its number of frames. The equivalent scores are denoted
-        # below as weighted mean
-        num_frames_array = [dataset.n_images_dict[vid_nr] for vid_nr in vid_nr_array]
-        if len(scores) > 0 and num_frames_array and sum(num_frames_array) > 0:
-            weighted_mean_scores = np.average(scores, 0, num_frames_array)
-        else:
-            weighted_mean_scores = np.array([np.nan] * 6)  # 6 metrics: kld, nss, cc, sim, aucj, aucs
+            # In previous literature, scores were computed across all video frames,
+            # which means that each videos contribution to the overall score is
+            # weighted by its number of frames. The equivalent scores are denoted
+            # below as weighted mean
+            num_frames_array = [dataset.n_images_dict[vid_nr] for vid_nr in vid_nr_array]
+            if len(scores) > 0 and num_frames_array and sum(num_frames_array) > 0:
+                weighted_mean_scores = np.average(scores, 0, num_frames_array)
+            else:
+                weighted_mean_scores = np.array([np.nan] * len(metrics))
 
-        # Print and save the scores
-        print()
-        print("Macro average (average of video averages) scores:")
-        print(", ".join(f"{metric:5s}" for metric in metrics))
-        print(", ".join(f"{score:.3f}" for score in mean_scores))
-        print()
-        print("Weighted average (per-frame average) scores:")
-        print(", ".join(f"{metric:5s}" for metric in metrics))
-        print(", ".join(f"{score:.3f}" for score in weighted_mean_scores))
-        if subset == 1:
+            # Print and save the scores
+            print()
+            print("Macro average (average of video averages) scores:")
+            print(", ".join(f"{metric:5s}" for metric in metrics))
+            print(", ".join(f"{score:.3f}" for score in mean_scores))
+            print()
+            print("Weighted average (per-frame average) scores:")
+            print(", ".join(f"{metric:5s}" for metric in metrics))
+            print(", ".join(f"{score:.3f}" for score in weighted_mean_scores))
+        else:
+            print()
+            print("Inference completed without evaluation metrics (no ground truth available)")
+            mean_scores = None
+            weighted_mean_scores = None
+        if subset == 1 and metrics is not None:
             dest_dir = self.mit1003_dir if source == "MIT1003" else self.train_dir
             if source in ("Hollywood", "UCFSports"):
                 source += "_resized"
@@ -1024,14 +1057,32 @@ class Trainer(utils.KwConfigClass):
 
         self.num_workers = 4
 
-        # Load the best weights, if available, otherwise the weights of
-        # the last epoch
+        # Copy pretrained weights to current train directory for evaluation
+        pretrained_dir = Path(os.environ["TRAIN_DIR"]) / "pretrained_unisal"
+        pretrained_weights = pretrained_dir / "weights_best.pth"
+        current_weights = self.train_dir / "weights_best.pth"
+        
+        if pretrained_weights.exists() and not current_weights.exists():
+            import shutil
+            shutil.copy2(pretrained_weights, current_weights)
+            print(f"Copied pretrained weights from {pretrained_weights} to {current_weights}")
+
+        # Load the pretrained weights from pretrained_unisal directory
         try:
-            self.model.load_best_weights(self.train_dir)
-            print("Best weights loaded")
+            self.model.load_best_weights(pretrained_dir)
+            print("Pretrained best weights loaded")
         except FileNotFoundError:
-            print("No best weights found")
-            self.model.load_last_chkpnt(self.train_dir)
+            try:
+                self.model.load_last_chkpnt(pretrained_dir)
+                print("Pretrained last checkpoint loaded")
+            except FileNotFoundError:
+                print("No pretrained weights found, trying current train_dir")
+                try:
+                    self.model.load_best_weights(self.train_dir)
+                    print("Best weights loaded from current train_dir")
+                except FileNotFoundError:
+                    print("No best weights found")
+                    self.model.load_last_chkpnt(self.train_dir)
 
         # Run the fine tuning
         # pprint.pprint(self.asdict(), width=1)
@@ -1054,8 +1105,14 @@ class Trainer(utils.KwConfigClass):
             val_score = -val_loss
             if self.best_val_score is None:
                 self.best_val_score = val_score
+                self.model.save_weights(self.train_dir, "ft_mit1003")
+                print(f"Initial MIT1003 fine-tuned weights saved at epoch {self.epoch}")
+                best_epoch = self.epoch
+                best_val = val_loss
             elif val_score > self.best_val_score:
                 self.best_val_score = val_score
+                self.model.save_weights(self.train_dir, "ft_mit1003")
+                print(f"New best MIT1003 fine-tuned weights saved at epoch {self.epoch}")
                 best_epoch = self.epoch
                 best_val = val_loss
 
